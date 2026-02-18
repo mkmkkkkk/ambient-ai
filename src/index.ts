@@ -3,10 +3,14 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  AMBIENT_INBOX_DIR,
+  AMBIENT_POLL_INTERVAL,
+  AMBIENT_PROCESSED_DIR,
   ASSISTANT_NAME,
   DATA_DIR,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
+  OPENAI_API_KEY,
   POLL_INTERVAL,
   TRIGGER_PATTERN,
 } from './config.js';
@@ -36,6 +40,7 @@ import { GroupQueue } from './group-queue.js';
 import { startIpcWatcher } from './ipc.js';
 import { formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { startTranscriptIngest } from './ambient/transcript-ingest.js';
 import { NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -494,6 +499,44 @@ async function main(): Promise<void> {
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
+
+  // Start ambient transcript ingestion watcher
+  startTranscriptIngest({
+    inboxDir: AMBIENT_INBOX_DIR,
+    processedDir: AMBIENT_PROCESSED_DIR,
+    pollInterval: AMBIENT_POLL_INTERVAL,
+    openaiApiKey: OPENAI_API_KEY || undefined,
+    whisperModel: 'whisper-1',
+    onTranscript: async (transcript, sourceFile) => {
+      // Find the main group JID to inject transcript as a message
+      const mainJid = Object.entries(registeredGroups).find(
+        ([, g]) => g.folder === MAIN_GROUP_FOLDER,
+      )?.[0];
+      if (!mainJid) {
+        logger.warn('No main group registered, cannot inject transcript');
+        return;
+      }
+
+      // Store as a message from the owner (not from the bot)
+      const msg: NewMessage = {
+        id: `transcript-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        chat_jid: mainJid,
+        sender: 'owner',
+        sender_name: 'Owner',
+        content: `[Transcript from ${sourceFile}]\n\n${transcript}`,
+        timestamp: new Date().toISOString(),
+        is_from_me: false,
+        is_bot_message: false,
+      };
+
+      storeMessage(msg);
+      logger.info({ sourceFile, mainJid }, 'Transcript injected as message');
+
+      // Trigger processing
+      queue.enqueueMessageCheck(mainJid);
+    },
+  });
+
   startMessageLoop();
 }
 

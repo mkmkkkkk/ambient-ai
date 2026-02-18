@@ -5,10 +5,16 @@ import { readEnvFile } from './env.js';
 // Read config values from .env (falls back to process.env).
 // Secrets are NOT read here — they stay on disk and are loaded only
 // where needed (container-runner.ts) to avoid leaking to child processes.
-const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER']);
+const envConfig = readEnvFile([
+  'ASSISTANT_NAME',
+  'ASSISTANT_HAS_OWN_NUMBER',
+  'OPENAI_API_KEY',
+  'AMBIENT_INBOX_DIR',
+  'MORNING_REPORT_HOUR',
+]);
 
 export const ASSISTANT_NAME =
-  process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
+  process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Ambient';
 export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER || envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 export const POLL_INTERVAL = 2000;
@@ -63,3 +69,18 @@ export const TRIGGER_PATTERN = new RegExp(
 // Uses system timezone by default
 export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// --- Ambient AI config ---
+export const AMBIENT_INBOX_DIR = path.resolve(
+  PROJECT_ROOT,
+  process.env.AMBIENT_INBOX_DIR || envConfig.AMBIENT_INBOX_DIR || 'data/audio-inbox',
+);
+export const AMBIENT_PROCESSED_DIR = path.resolve(PROJECT_ROOT, 'data/audio-processed');
+export const AMBIENT_POLL_INTERVAL = 5000;
+export const MORNING_REPORT_HOUR = parseInt(
+  process.env.MORNING_REPORT_HOUR || envConfig.MORNING_REPORT_HOUR || '7',
+  10,
+);
+// OpenAI API key for Whisper — read from env, not hardcoded
+export const OPENAI_API_KEY =
+  process.env.OPENAI_API_KEY || envConfig.OPENAI_API_KEY || '';

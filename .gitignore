@@ -16,11 +16,19 @@ groups/*
 groups/main/*
 groups/global/*
 !groups/main/CLAUDE.md
+!groups/main/owner-profile.md
+!groups/main/feedback.md
+!groups/main/mistakes.md
+!groups/main/action-log.md
+!groups/main/transcripts/
+groups/main/transcripts/*
+!groups/main/transcripts/.gitkeep
 !groups/global/CLAUDE.md
 
 # Secrets
 *.keys.json
 .env
+.transcription.config.json
 
 # OS
 .DS_Store
