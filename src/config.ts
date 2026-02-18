@@ -10,7 +10,6 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'OPENAI_API_KEY',
   'AMBIENT_INBOX_DIR',
-  'MORNING_REPORT_HOUR',
 ]);
 
 export const ASSISTANT_NAME =
@@ -77,10 +76,6 @@ export const AMBIENT_INBOX_DIR = path.resolve(
 );
 export const AMBIENT_PROCESSED_DIR = path.resolve(PROJECT_ROOT, 'data/audio-processed');
 export const AMBIENT_POLL_INTERVAL = 5000;
-export const MORNING_REPORT_HOUR = parseInt(
-  process.env.MORNING_REPORT_HOUR || envConfig.MORNING_REPORT_HOUR || '7',
-  10,
-);
 // OpenAI API key for Whisper — read from env, not hardcoded
 export const OPENAI_API_KEY =
   process.env.OPENAI_API_KEY || envConfig.OPENAI_API_KEY || '';
