@@ -8,10 +8,13 @@ import {
   AMBIENT_PROCESSED_DIR,
   ASSISTANT_NAME,
   DATA_DIR,
+  GROQ_API_KEY,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   OPENAI_API_KEY,
   POLL_INTERVAL,
+  SONIOX_API_KEY,
+  STT_BACKEND,
   TRIGGER_PATTERN,
 } from './config.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
@@ -505,8 +508,12 @@ async function main(): Promise<void> {
     inboxDir: AMBIENT_INBOX_DIR,
     processedDir: AMBIENT_PROCESSED_DIR,
     pollInterval: AMBIENT_POLL_INTERVAL,
+    backend: STT_BACKEND,
+    sonioxApiKey: SONIOX_API_KEY || undefined,
     openaiApiKey: OPENAI_API_KEY || undefined,
+    groqApiKey: GROQ_API_KEY || undefined,
     whisperModel: 'whisper-1',
+    languageHints: ['en', 'zh'],
     onTranscript: async (transcript, sourceFile) => {
       // Find the main group JID to inject transcript as a message
       const mainJid = Object.entries(registeredGroups).find(

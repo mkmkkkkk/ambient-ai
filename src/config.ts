@@ -9,6 +9,9 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'OPENAI_API_KEY',
+  'SONIOX_API_KEY',
+  'GROQ_API_KEY',
+  'STT_BACKEND',
   'AMBIENT_INBOX_DIR',
 ]);
 
@@ -76,6 +79,15 @@ export const AMBIENT_INBOX_DIR = path.resolve(
 );
 export const AMBIENT_PROCESSED_DIR = path.resolve(PROJECT_ROOT, 'data/audio-processed');
 export const AMBIENT_POLL_INTERVAL = 5000;
-// OpenAI API key for Whisper — read from env, not hardcoded
+
+// Speech-to-text backend: 'soniox' (default), 'whisper', or 'groq'
+export const STT_BACKEND =
+  (process.env.STT_BACKEND || envConfig.STT_BACKEND || 'soniox') as 'soniox' | 'whisper' | 'groq';
+
+// API keys for each backend
+export const SONIOX_API_KEY =
+  process.env.SONIOX_API_KEY || envConfig.SONIOX_API_KEY || '';
 export const OPENAI_API_KEY =
   process.env.OPENAI_API_KEY || envConfig.OPENAI_API_KEY || '';
+export const GROQ_API_KEY =
+  process.env.GROQ_API_KEY || envConfig.GROQ_API_KEY || '';

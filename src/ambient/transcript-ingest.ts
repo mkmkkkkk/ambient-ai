@@ -1,23 +1,24 @@
 /**
  * Transcript Ingestion Module
  *
- * Watches a configurable directory for new audio files (or pre-transcribed text files).
- * Audio files are transcribed via OpenAI Whisper API, then injected into NanoClaw
- * as messages so the agent can process them.
+ * Watches a directory for new audio files (or pre-transcribed text files).
+ * Audio files are transcribed via a configurable backend (Soniox, Whisper, Groq),
+ * then injected into NanoClaw as messages so the agent can process them.
  *
- * Handles large WAV files automatically by splitting into <24MB chunks.
- * A 10-hour recording at 1MB/min (~600MB) is split into ~25 chunks,
- * each transcribed separately with context carried between chunks.
+ * Backends:
+ * - **soniox**: Best for bilingual EN/CN code-switching. Async file API with
+ *   speaker diarization and per-token language identification.
+ * - **whisper**: OpenAI Whisper API (whisper-1 / gpt-4o-transcribe). Single-language
+ *   detection per 30s chunk — poor for code-switching.
+ * - **groq**: Groq-hosted Whisper (whisper-large-v3-turbo). Cheapest option,
+ *   same limitations as Whisper for code-switching.
+ *
+ * Handles large WAV files automatically by splitting into <24MB chunks (Whisper/Groq).
+ * Soniox accepts files up to 1GB natively — no splitting needed.
  *
  * Supported input formats:
  * - .txt, .md: treated as pre-transcribed text, injected directly
- * - .wav: split into chunks if >24MB, transcribed via Whisper
- * - .mp3, .m4a, .ogg, .webm, .flac: transcribed via Whisper (must be <25MB each)
- *
- * Usage:
- *   Drop audio files into the inbox directory (default: data/audio-inbox/).
- *   The watcher picks them up, transcribes, injects as [Transcript] messages,
- *   then moves them to data/audio-processed/.
+ * - .wav, .mp3, .m4a, .ogg, .webm, .flac: transcribed via configured backend
  */
 
 import fs from 'fs';
@@ -26,6 +27,12 @@ import path from 'path';
 import { logger } from '../logger.js';
 import { splitWav, wavNeedsSplitting } from './wav-splitter.js';
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type TranscriptionBackend = 'soniox' | 'whisper' | 'groq';
+
 export interface TranscriptIngestConfig {
   /** Directory to watch for new audio/text files */
   inboxDir: string;
@@ -33,10 +40,20 @@ export interface TranscriptIngestConfig {
   processedDir: string;
   /** Poll interval in ms (default: 5000) */
   pollInterval: number;
-  /** OpenAI API key for Whisper (read from .env or config) */
+  /** Transcription backend (default: soniox) */
+  backend?: TranscriptionBackend;
+  /** Soniox API key */
+  sonioxApiKey?: string;
+  /** OpenAI API key for Whisper */
   openaiApiKey?: string;
+  /** Groq API key */
+  groqApiKey?: string;
   /** Whisper model (default: whisper-1) */
-  whisperModel: string;
+  whisperModel?: string;
+  /** Language hints for Soniox (default: ['en', 'zh']) */
+  languageHints?: string[];
+  /** Enable speaker diarization (Soniox only, default: true) */
+  enableDiarization?: boolean;
   /** Callback to inject transcript as a message */
   onTranscript: (transcript: string, sourceFile: string) => Promise<void>;
 }
@@ -53,11 +70,160 @@ const MIME_MAP: Record<string, string> = {
   flac: 'audio/flac',
 };
 
-/**
- * Transcribe a single audio buffer using OpenAI Whisper API.
- * @param previousText - Last ~200 chars from previous chunk for continuity
- */
-async function transcribeBuffer(
+// ---------------------------------------------------------------------------
+// Soniox Backend
+// ---------------------------------------------------------------------------
+
+const SONIOX_BASE = 'https://api.soniox.com/v1';
+
+async function sonioxUploadFile(
+  filePath: string,
+  apiKey: string,
+): Promise<string> {
+  const formData = new FormData();
+  const fileBuffer = fs.readFileSync(filePath);
+  const blob = new Blob([fileBuffer]);
+  formData.append('file', blob, path.basename(filePath));
+
+  const res = await fetch(`${SONIOX_BASE}/files`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Soniox upload failed (${res.status}): ${text}`);
+  }
+
+  const data = (await res.json()) as { id: string };
+  return data.id;
+}
+
+async function sonioxCreateTranscription(
+  fileId: string,
+  apiKey: string,
+  languageHints: string[],
+  enableDiarization: boolean,
+): Promise<string> {
+  const res = await fetch(`${SONIOX_BASE}/transcriptions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'stt-async-v4',
+      file_id: fileId,
+      language_hints: languageHints,
+      enable_language_identification: true,
+      enable_speaker_diarization: enableDiarization,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Soniox create transcription failed (${res.status}): ${text}`);
+  }
+
+  const data = (await res.json()) as { id: string };
+  return data.id;
+}
+
+async function sonioxPollUntilDone(
+  transcriptionId: string,
+  apiKey: string,
+): Promise<void> {
+  const maxWait = 600_000; // 10 minutes
+  const start = Date.now();
+
+  while (Date.now() - start < maxWait) {
+    const res = await fetch(`${SONIOX_BASE}/transcriptions/${transcriptionId}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Soniox poll failed (${res.status}): ${text}`);
+    }
+
+    const data = (await res.json()) as {
+      status: string;
+      error_message?: string;
+    };
+
+    if (data.status === 'completed') return;
+    if (data.status === 'error') {
+      throw new Error(`Soniox transcription error: ${data.error_message}`);
+    }
+
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+
+  throw new Error('Soniox transcription timed out after 10 minutes');
+}
+
+interface SonioxToken {
+  text: string;
+  speaker?: number;
+  language?: string;
+}
+
+async function sonioxGetTranscript(
+  transcriptionId: string,
+  apiKey: string,
+): Promise<string> {
+  const res = await fetch(
+    `${SONIOX_BASE}/transcriptions/${transcriptionId}/transcript`,
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Soniox get transcript failed (${res.status}): ${text}`);
+  }
+
+  const data = (await res.json()) as { tokens: SonioxToken[] };
+  return data.tokens.map((t) => t.text).join('');
+}
+
+async function transcribeWithSoniox(
+  filePath: string,
+  apiKey: string,
+  languageHints: string[],
+  enableDiarization: boolean,
+): Promise<string> {
+  const filename = path.basename(filePath);
+  const sizeMB = (fs.statSync(filePath).size / (1024 * 1024)).toFixed(1);
+
+  logger.info({ filename, sizeMB: `${sizeMB}MB` }, 'Uploading to Soniox');
+  const fileId = await sonioxUploadFile(filePath, apiKey);
+
+  logger.info({ filename, fileId }, 'Creating Soniox transcription');
+  const txnId = await sonioxCreateTranscription(
+    fileId,
+    apiKey,
+    languageHints,
+    enableDiarization,
+  );
+
+  logger.info({ filename, txnId }, 'Waiting for Soniox transcription');
+  await sonioxPollUntilDone(txnId, apiKey);
+
+  const transcript = await sonioxGetTranscript(txnId, apiKey);
+  logger.info(
+    { filename, chars: transcript.length },
+    'Soniox transcription complete',
+  );
+
+  return transcript;
+}
+
+// ---------------------------------------------------------------------------
+// Whisper Backend (OpenAI)
+// ---------------------------------------------------------------------------
+
+async function transcribeBufferWhisper(
   buffer: Buffer,
   filename: string,
   mimeType: string,
@@ -76,17 +242,13 @@ async function transcribeBuffer(
     file,
     model,
     response_format: 'text' as const,
-    // Pass context from previous chunk to maintain continuity across splits
     ...(previousText ? { prompt: previousText.slice(-200) } : {}),
   });
 
   return (transcription as unknown as string).trim();
 }
 
-/**
- * Transcribe an audio file, handling large WAV files by splitting into chunks.
- */
-async function transcribeAudio(
+async function transcribeWithWhisper(
   filePath: string,
   apiKey: string,
   model: string,
@@ -94,14 +256,14 @@ async function transcribeAudio(
   const ext = path.extname(filePath).toLowerCase().slice(1);
   const mimeType = MIME_MAP[ext] || 'audio/mpeg';
 
-  // Large WAV files: split into chunks and transcribe each
+  // Large WAV files: split into chunks
   if (ext === 'wav' && wavNeedsSplitting(filePath)) {
     const stat = fs.statSync(filePath);
     const sizeMB = (stat.size / (1024 * 1024)).toFixed(0);
     const chunks = splitWav(filePath);
     logger.info(
       { file: path.basename(filePath), sizeMB, chunks: chunks.length },
-      'Splitting large WAV for transcription',
+      'Splitting large WAV for Whisper',
     );
 
     const transcripts: string[] = [];
@@ -109,11 +271,11 @@ async function transcribeAudio(
 
     for (let i = 0; i < chunks.length; i++) {
       logger.info(
-        { chunk: `${i + 1}/${chunks.length}`, file: path.basename(filePath) },
+        { chunk: `${i + 1}/${chunks.length}` },
         'Transcribing chunk',
       );
 
-      const text = await transcribeBuffer(
+      const text = await transcribeBufferWhisper(
         chunks[i],
         `chunk-${i}.wav`,
         'audio/wav',
@@ -133,13 +295,77 @@ async function transcribeAudio(
 
   // Small files: transcribe directly
   const buffer = fs.readFileSync(filePath);
-  return transcribeBuffer(buffer, path.basename(filePath), mimeType, apiKey, model);
+  return transcribeBufferWhisper(
+    buffer,
+    path.basename(filePath),
+    mimeType,
+    apiKey,
+    model,
+  );
 }
 
-/**
- * Check if a file is still being written to (e.g. USB copy in progress).
- * Waits for file size to stabilize over 2 seconds.
- */
+// ---------------------------------------------------------------------------
+// Groq Backend (Whisper on Groq)
+// ---------------------------------------------------------------------------
+
+async function transcribeWithGroq(
+  filePath: string,
+  apiKey: string,
+): Promise<string> {
+  const ext = path.extname(filePath).toLowerCase().slice(1);
+  const mimeType = MIME_MAP[ext] || 'audio/mpeg';
+
+  // Groq also has 25MB limit — reuse WAV splitting
+  if (ext === 'wav' && wavNeedsSplitting(filePath)) {
+    const chunks = splitWav(filePath);
+    logger.info(
+      { file: path.basename(filePath), chunks: chunks.length },
+      'Splitting large WAV for Groq',
+    );
+
+    const transcripts: string[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      logger.info({ chunk: `${i + 1}/${chunks.length}` }, 'Transcribing chunk (Groq)');
+      const text = await groqTranscribeBuffer(chunks[i], `chunk-${i}.wav`, 'audio/wav', apiKey);
+      if (text) transcripts.push(text);
+    }
+    return transcripts.join(' ');
+  }
+
+  const buffer = fs.readFileSync(filePath);
+  return groqTranscribeBuffer(buffer, path.basename(filePath), mimeType, apiKey);
+}
+
+async function groqTranscribeBuffer(
+  buffer: Buffer,
+  filename: string,
+  mimeType: string,
+  apiKey: string,
+): Promise<string> {
+  const formData = new FormData();
+  const blob = new Blob([buffer], { type: mimeType });
+  formData.append('file', blob, filename);
+  formData.append('model', 'whisper-large-v3-turbo');
+  formData.append('response_format', 'text');
+
+  const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Groq transcription failed (${res.status}): ${text}`);
+  }
+
+  return (await res.text()).trim();
+}
+
+// ---------------------------------------------------------------------------
+// File Stability Check
+// ---------------------------------------------------------------------------
+
 async function waitForStableFile(filePath: string): Promise<boolean> {
   try {
     const size1 = fs.statSync(filePath).size;
@@ -152,14 +378,57 @@ async function waitForStableFile(filePath: string): Promise<boolean> {
   }
 }
 
-/**
- * Start the transcript ingestion watcher.
- * Returns a cleanup function to stop the watcher.
- */
+// ---------------------------------------------------------------------------
+// Main Transcription Router
+// ---------------------------------------------------------------------------
+
+async function transcribeAudio(
+  filePath: string,
+  config: TranscriptIngestConfig,
+): Promise<string> {
+  const backend = config.backend || 'soniox';
+
+  switch (backend) {
+    case 'soniox': {
+      if (!config.sonioxApiKey) {
+        throw new Error('SONIOX_API_KEY required for soniox backend');
+      }
+      return transcribeWithSoniox(
+        filePath,
+        config.sonioxApiKey,
+        config.languageHints || ['en', 'zh'],
+        config.enableDiarization !== false,
+      );
+    }
+    case 'whisper': {
+      if (!config.openaiApiKey) {
+        throw new Error('OPENAI_API_KEY required for whisper backend');
+      }
+      return transcribeWithWhisper(
+        filePath,
+        config.openaiApiKey,
+        config.whisperModel || 'whisper-1',
+      );
+    }
+    case 'groq': {
+      if (!config.groqApiKey) {
+        throw new Error('GROQ_API_KEY required for groq backend');
+      }
+      return transcribeWithGroq(filePath, config.groqApiKey);
+    }
+    default:
+      throw new Error(`Unknown transcription backend: ${backend}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Watcher
+// ---------------------------------------------------------------------------
+
 export function startTranscriptIngest(config: TranscriptIngestConfig): () => void {
   const { inboxDir, processedDir, pollInterval, onTranscript } = config;
+  const backend = config.backend || 'soniox';
 
-  // Ensure directories exist
   fs.mkdirSync(inboxDir, { recursive: true });
   fs.mkdirSync(processedDir, { recursive: true });
 
@@ -170,7 +439,6 @@ export function startTranscriptIngest(config: TranscriptIngestConfig): () => voi
     const ext = path.extname(filename).toLowerCase();
 
     try {
-      // Wait for file to finish copying (USB transfer may be slow)
       const stable = await waitForStableFile(filePath);
       if (!stable) {
         logger.debug({ filename }, 'File not stable yet, skipping this cycle');
@@ -182,13 +450,25 @@ export function startTranscriptIngest(config: TranscriptIngestConfig): () => voi
       if (TEXT_EXTENSIONS.has(ext)) {
         transcript = fs.readFileSync(filePath, 'utf-8').trim();
       } else if (AUDIO_EXTENSIONS.has(ext)) {
-        if (!config.openaiApiKey) {
-          logger.warn({ filename }, 'No OpenAI API key configured, skipping audio file');
+        const hasKey =
+          (backend === 'soniox' && config.sonioxApiKey) ||
+          (backend === 'whisper' && config.openaiApiKey) ||
+          (backend === 'groq' && config.groqApiKey);
+
+        if (!hasKey) {
+          logger.warn(
+            { filename, backend },
+            `No API key configured for ${backend} backend, skipping audio file`,
+          );
           return;
         }
+
         const sizeMB = (fs.statSync(filePath).size / (1024 * 1024)).toFixed(1);
-        logger.info({ filename, sizeMB: `${sizeMB}MB` }, 'Transcribing audio file');
-        transcript = await transcribeAudio(filePath, config.openaiApiKey, config.whisperModel);
+        logger.info(
+          { filename, sizeMB: `${sizeMB}MB`, backend },
+          'Transcribing audio file',
+        );
+        transcript = await transcribeAudio(filePath, config);
       } else {
         logger.debug({ filename }, 'Ignoring file with unsupported extension');
         return;
@@ -199,24 +479,18 @@ export function startTranscriptIngest(config: TranscriptIngestConfig): () => voi
         return;
       }
 
-      // Inject transcript
       await onTranscript(transcript, filename);
-      logger.info(
-        { filename, chars: transcript.length },
-        'Transcript ingested',
-      );
+      logger.info({ filename, chars: transcript.length }, 'Transcript ingested');
 
-      // Move to processed directory
       const destPath = path.join(processedDir, `${Date.now()}_${filename}`);
       fs.renameSync(filePath, destPath);
     } catch (err) {
       logger.error({ filename, err }, 'Failed to process transcript file');
-      // Move to processed with error prefix to avoid retry loop
       try {
         const errPath = path.join(processedDir, `ERROR_${Date.now()}_${filename}`);
         fs.renameSync(filePath, errPath);
       } catch {
-        // If we can't even move it, leave it — will retry next poll
+        // Leave it — will retry next poll
       }
     }
   };
@@ -242,7 +516,7 @@ export function startTranscriptIngest(config: TranscriptIngestConfig): () => voi
     }
   };
 
-  logger.info({ inboxDir, pollInterval }, 'Transcript ingest watcher started');
+  logger.info({ inboxDir, pollInterval, backend }, 'Transcript ingest watcher started');
   poll();
 
   return () => {
