@@ -1,197 +1,143 @@
-<p align="center">
-  <img src="assets/nanoclaw-logo.png" alt="NanoClaw" width="400">
-</p>
+# Ambient AI
 
-<p align="center">
-  My personal Claude assistant that runs securely in containers. Lightweight and built to be understood and customized for your own needs.
-</p>
+A silent personal assistant that wears a microphone, listens to your entire day, and acts autonomously — without being asked.
 
-<p align="center">
-  <a href="README_zh.md">中文</a>&nbsp; • &nbsp;
-  <a href="https://discord.gg/VDdww8qS42"><img src="https://img.shields.io/discord/1470188214710046894?label=Discord&logo=discord&v=2" alt="Discord" valign="middle"></a>&nbsp; • &nbsp;
-  <a href="repo-tokens"><img src="repo-tokens/badge.svg" alt="34.9k tokens, 17% of context window" valign="middle"></a>
-</p>
+Built on [NanoClaw](https://github.com/qwibitai/nanoclaw) (~3,700 lines TypeScript). MIT license.
 
-**New:** First AI assistant to support [Agent Swarms](https://code.claude.com/docs/en/agent-teams). Spin up teams of agents that collaborate in your chat.
+## What It Does
 
-## Why I Built This
+You clip a recorder to your collar. Go about your day. Talk to people, make promises, complain about things, have ideas.
 
-[OpenClaw](https://github.com/openclaw/openclaw) is an impressive project with a great vision. But I can't sleep well running software I don't understand with access to my life. OpenClaw has 52+ modules, 8 config management files, 45+ dependencies, and abstractions for 15 channel providers. Security is application-level (allowlists, pairing codes) rather than OS isolation. Everything runs in one Node process with shared memory.
+Ambient AI listens to all of it. Then it acts:
 
-NanoClaw gives you the same core functionality in a codebase you can understand in 8 minutes. One process. A handful of files. Agents run in actual Linux containers with filesystem isolation, not behind permission checks.
+- You told a colleague "I'll send you the deck by Friday" → it drafts the email
+- You complained about a leaking faucet three times → it books a plumber
+- You promised your mom you'd call this weekend → it surfaces a reminder Saturday
+- You forgot to reply to an important email → it drafts the response
+- Your car registration expires next month → it starts the renewal
 
-## Quick Start
+No commands. No "Hey Siri." No interaction required. It just handles things.
 
-```bash
-git clone https://github.com/gavrielc/nanoclaw.git
-cd nanoclaw
-claude
+## The Three Phases
+
+**Phase 1: Internship** (~60 days)
+Listen only. Learn who you are — habits, relationships, frustrations, values. Never act. Never suggest.
+
+**Phase 2: Supervised Autonomy**
+Start acting. Report what was done:
+```
+I booked a plumber for Thursday 2pm because you mentioned the leak three times.
+
+Keep or undo?
 ```
 
-Then run `/setup`. Claude Code handles everything: dependencies, authentication, container setup, service configuration.
-
-## Philosophy
-
-**Small enough to understand.** One process, a few source files. No microservices, no message queues, no abstraction layers. Have Claude Code walk you through it.
-
-**Secure by isolation.** Agents run in Linux containers (Apple Container on macOS, or Docker). They can only see what's explicitly mounted. Bash access is safe because commands run inside the container, not on your host.
-
-**Built for one user.** This isn't a framework. It's working software that fits my exact needs. You fork it and have Claude Code make it match your exact needs.
-
-**Customization = code changes.** No configuration sprawl. Want different behavior? Modify the code. The codebase is small enough that this is safe.
-
-**AI-native.** No installation wizard; Claude Code guides setup. No monitoring dashboard; ask Claude what's happening. No debugging tools; describe the problem, Claude fixes it.
-
-**Skills over features.** Contributors shouldn't add features (e.g. support for Telegram) to the codebase. Instead, they contribute [claude code skills](https://code.claude.com/docs/en/skills) like `/add-telegram` that transform your fork. You end up with clean code that does exactly what you need.
-
-**Best harness, best model.** This runs on Claude Agent SDK, which means you're running Claude Code directly. The harness matters. A bad harness makes even smart models seem dumb, a good harness gives them superpowers. Claude Code is (IMO) the best harness available.
-
-## What It Supports
-
-- **WhatsApp I/O** - Message Claude from your phone
-- **Isolated group context** - Each group has its own `CLAUDE.md` memory, isolated filesystem, and runs in its own container sandbox with only that filesystem mounted
-- **Main channel** - Your private channel (self-chat) for admin control; every other group is completely isolated
-- **Scheduled tasks** - Recurring jobs that run Claude and can message you back
-- **Web access** - Search and fetch content
-- **Container isolation** - Agents sandboxed in Apple Container (macOS) or Docker (macOS/Linux)
-- **Agent Swarms** - Spin up teams of specialized agents that collaborate on complex tasks (first personal AI assistant to support this)
-- **Optional integrations** - Add Gmail (`/add-gmail`) and more via skills
-
-## Usage
-
-Talk to your assistant with the trigger word (default: `@Andy`):
-
-```
-@Andy send an overview of the sales pipeline every weekday morning at 9am (has access to my Obsidian vault folder)
-@Andy review the git history for the past week each Friday and update the README if there's drift
-@Andy every Monday at 8am, compile news on AI developments from Hacker News and TechCrunch and message me a briefing
-```
-
-From the main channel (your self-chat), you can manage groups and tasks:
-```
-@Andy list all scheduled tasks across groups
-@Andy pause the Monday briefing task
-@Andy join the Family Chat group
-```
-
-## Customizing
-
-There are no configuration files to learn. Just tell Claude Code what you want:
-
-- "Change the trigger word to @Bob"
-- "Remember in the future to make responses shorter and more direct"
-- "Add a custom greeting when I say good morning"
-- "Store conversation summaries weekly"
-
-Or run `/customize` for guided changes.
-
-The codebase is small enough that Claude can safely modify it.
-
-## Skills System CLI (Experimental)
-
-The new deterministic skills-system primitives are available as local commands:
-
-```bash
-npm run skills:init -- --core-version 0.5.0 --base-source .
-npm run skills:apply -- --skill whatsapp --version 1.2.0 --files-modified src/server.ts
-npm run skills:update-preview
-npm run skills:update-stage -- --target-core-version 0.6.0 --base-source /path/to/new/core
-npm run skills:update-commit
-# or: npm run skills:update-rollback
-```
-
-These commands operate on `.nanoclaw/state.yaml`, `.nanoclaw/state.next.yaml`, `.nanoclaw/base/`, `.nanoclaw/base.next/`, and `.nanoclaw/backup/`.
-
-## Contributing
-
-**Don't add features. Add skills.**
-
-If you want to add Telegram support, don't create a PR that adds Telegram alongside WhatsApp. Instead, contribute a skill file (`.claude/skills/add-telegram/SKILL.md`) that teaches Claude Code how to transform a NanoClaw installation to use Telegram.
-
-Users then run `/add-telegram` on their fork and get clean code that does exactly what they need, not a bloated system trying to support every use case.
-
-### RFS (Request for Skills)
-
-Skills we'd love to see:
-
-**Communication Channels**
-- `/add-telegram` - Add Telegram as channel. Should give the user option to replace WhatsApp or add as additional channel. Also should be possible to add it as a control channel (where it can trigger actions) or just a channel that can be used in actions triggered elsewhere
-- `/add-slack` - Add Slack
-- `/add-discord` - Add Discord
-
-**Platform Support**
-- `/setup-windows` - Windows via WSL2 + Docker
-
-**Session Management**
-- `/add-clear` - Add a `/clear` command that compacts the conversation (summarizes context while preserving critical information in the same session). Requires figuring out how to trigger compaction programmatically via the Claude Agent SDK.
-
-## Requirements
-
-- macOS or Linux
-- Node.js 20+
-- [Claude Code](https://claude.ai/download)
-- [Apple Container](https://github.com/apple/container) (macOS) or [Docker](https://docker.com/products/docker-desktop) (macOS/Linux)
+**Phase 3: Full Autonomy**
+Stop asking. Just run. Only confirm for high-stakes actions (money, legal, new contacts).
 
 ## Architecture
 
 ```
-WhatsApp (baileys) --> SQLite --> Polling loop --> Container (Claude Agent SDK) --> Response
+Recorder (clip-on mic)
+    ↓ USB copy
+data/audio-inbox/
+    ↓ File watcher (polls every 5s)
+WAV splitter (chunks >24MB files)
+    ↓
+Whisper API (speech-to-text, ~$0.006/min)
+    ↓ Inject as messages
+NanoClaw (Claude Agent SDK in containers)
+    ↓ Acts per SOUL.md rules
+WhatsApp (owner communication)
 ```
 
-Single Node.js process. Agents execute in isolated Linux containers with mounted directories. Per-group message queue with concurrency control. IPC via filesystem.
+Single Node.js process. Container-isolated agent execution. SQLite storage.
 
-Key files:
-- `src/index.ts` - Orchestrator: state, message loop, agent invocation
-- `src/channels/whatsapp.ts` - WhatsApp connection, auth, send/receive
-- `src/ipc.ts` - IPC watcher and task processing
-- `src/router.ts` - Message formatting and outbound routing
-- `src/group-queue.ts` - Per-group queue with global concurrency limit
-- `src/container-runner.ts` - Spawns streaming agent containers
-- `src/task-scheduler.ts` - Runs scheduled tasks
-- `src/db.ts` - SQLite operations (messages, groups, sessions, state)
-- `groups/*/CLAUDE.md` - Per-group memory
+### Key Files
 
-## FAQ
+| File | Purpose |
+|------|---------|
+| `groups/global/CLAUDE.md` | **Soul** — agent personality and behavior rules |
+| `src/ambient/transcript-ingest.ts` | Watches inbox, transcribes, injects into agent |
+| `src/ambient/wav-splitter.ts` | Splits large WAV files (pure Node.js, no ffmpeg) |
+| `scripts/import-recordings.sh` | Copies recordings from USB to inbox |
+| `groups/main/owner-profile.md` | Evolving model of the owner |
+| `groups/main/feedback.md` | Keep/undo decisions — learning signal |
+| `groups/main/mistakes.md` | Errors made, never to repeat |
 
-**Why WhatsApp and not Telegram/Signal/etc?**
+## Hardware
 
-Because I use WhatsApp. Fork it and run a skill to change it. That's the whole point.
+Any recorder that saves standard audio files (.wav, .mp3, etc).
 
-**Why Apple Container instead of Docker?**
+| Device | Price | Battery | Notes |
+|--------|-------|---------|-------|
+| USB voice recorder | $5-15 | 10-20hr | Cheapest. USB copy. |
+| DJI Mic 2 (TX only) | $89 | 6hr | Best audio. 32-bit WAV. |
+| Omi DevKit 2 | $89 | 10-14hr | Open source. BLE stream. |
 
-On macOS, Apple Container is lightweight, fast, and optimized for Apple silicon. But Docker is also fully supported—during `/setup`, you can choose which runtime to use. On Linux, Docker is used automatically.
+Whisper handles low-quality audio fine. Buy the cheapest thing that clips to your collar.
 
-**Can I run this on Linux?**
+## Setup
 
-Yes. Run `/setup` and it will automatically configure Docker as the container runtime. Thanks to [@dotsetgreg](https://github.com/dotsetgreg) for contributing the `/convert-to-docker` skill.
+```bash
+git clone https://github.com/mkmkkkkk/ambient-ai.git
+cd ambient-ai
+npm install
+cp .env.example .env     # Add your OpenAI API key
+npm run build
+./container/build.sh      # Build agent container
+npm run auth              # Scan WhatsApp QR code
+npm start
+```
 
-**Is this secure?**
+Requirements: Node.js 20+, [Apple Container](https://github.com/apple/container) or Docker, OpenAI API key.
 
-Agents run in containers, not behind application-level permission checks. They can only access explicitly mounted directories. You should still review what you're running, but the codebase is small enough that you actually can. See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
+## Daily Workflow
 
-**Why no configuration files?**
+```bash
+# Plug in USB recorder, then:
+./scripts/import-recordings.sh /Volumes/RECORDER
 
-We don't want configuration sprawl. Every user should customize it to so that the code matches exactly what they want rather than configuring a generic system. If you like having config files, tell Claude to add them.
+# Done. The system handles the rest automatically.
+```
 
-**How do I debug issues?**
+The import script finds all `.wav` files on the drive, copies new ones to `data/audio-inbox/`, and skips already-imported files. The transcript ingest watcher picks them up, transcribes via Whisper, and feeds to the agent.
 
-Ask Claude Code. "Why isn't the scheduler running?" "What's in the recent logs?" "Why did this message not get a response?" That's the AI-native approach.
+### How Large Files Work
 
-**Why isn't the setup working for me?**
+A 10-hour recording at 1MB/min = ~600MB. Whisper API has a 25MB limit. The system automatically splits large WAV files into <24MB chunks, transcribes each with context from the previous chunk for continuity. Pure Node.js — no ffmpeg required.
 
-I don't know. Run `claude`, then run `/debug`. If claude finds an issue that is likely affecting other users, open a PR to modify the setup SKILL.md.
+**Cost:** ~$3.60 for 10 hours of audio.
 
-**What changes will be accepted into the codebase?**
+## Configuration
 
-Security fixes, bug fixes, and clear improvements to the base configuration. That's it.
+```bash
+# .env
+OPENAI_API_KEY=sk-proj-...      # For Whisper
+AMBIENT_INBOX_DIR=data/audio-inbox
+ASSISTANT_NAME=Ambient
+TZ=America/Los_Angeles
+```
 
-Everything else (new capabilities, OS compatibility, hardware support, enhancements) should be contributed as skills.
+## Development
 
-This keeps the base system minimal and lets every user customize their installation without inheriting features they don't want.
+```bash
+npm run dev          # Hot reload
+npm run build        # Compile TypeScript
+npm run typecheck    # Type check
+npm test             # Tests
+```
 
-## Community
+## Philosophy
 
-Questions? Ideas? [Join the Discord](https://discord.gg/VDdww8qS42).
+> The owner should forget you exist. Their life just... works better. Small annoyances disappear. Things get done before they become urgent. Nothing falls through the cracks.
+>
+> They don't know how. They don't care how. It just works.
+
+The $80,000/year executive assistant that costs $20/month and never sleeps.
+
+## Credits
+
+Built on [NanoClaw](https://github.com/qwibitai/nanoclaw) by [@gavrielc](https://github.com/gavrielc).
 
 ## License
 
